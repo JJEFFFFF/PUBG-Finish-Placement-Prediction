@@ -1,0 +1,317 @@
+---
+title: "data_Project"
+author: "Jing Pang"
+date: "3/25/2019"
+output: html_document
+---
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(randomForest)
+library(RColorBrewer)
+library(xgboost)
+library(pROC)
+library(rsample)
+
+
+```
+
+load the data, and observe the data
+```{r}
+data <- read.csv("~/hw1/train_V2.csv")
+
+summary(data)
+data <- na.omit(data)
+
+```
+
+deal the outlier 
+```{r outliers}
+# Kills without movement
+data$totalDistance <- data$rideDistance + data$swimDistance + data$walkDistance
+hist(data$totalDistance)
+killWithoutMove <- data[which(data$totalDistance==0 & (data$DBNOs | data$kills>=1)), c(1)]
+head(killWithoutMove)
+
+# Anomalies in roadKills
+boxplot(data$roadKills)
+roadKillOut10 <- data[which(data$roadKills>10),c(1)]
+head(roadKillOut10)
+
+# Anomalies in aim (100% headshot rate)
+data$headShotRate <- data$headshotKills / data$kills 
+hist(data$headShotRate)
+headShot100Perc <- data[which(data$headShotRate==1 & (data$kills >= 5)),c(1)]
+head(headShot100Perc)
+
+# Anomalies in aim (Longest kill)
+boxplot(data$longestKill)
+longestKill <- data[which(data$longestKill>1000),c(1)]
+head(longestKill)
+
+# Anomalies in travelling (rideDistance, walkDistance and swimDistance)
+hist(data$rideDistance)
+hist(data$walkDistance)
+hist(data$swimDistance)
+
+# Kills Amount Anomalies
+totalKills<- data[which(data$kills>=25),c(1)]
+
+# remove outliers
+data <- subset(data, !(data$Id %in% killWithoutMove))
+data <- subset(data, !(data$Id %in% roadKillOut10))
+data <- subset(data, !(data$Id %in% headShot100Perc))
+data <- subset(data, !(data$Id %in% longestKill))
+data <- subset(data, !(data$Id %in% totalKills))
+
+nrow(data)
+data <- data[-c(30,31)]
+```
+
+
+density graphs 
+```{r observe the distribution of data}
+plot(density(data$assists))
+plot(density(data$boosts))
+plot(density(data$damageDealt))
+plot(density(data$DBNOs))
+plot(density(data$headshotKills))
+plot(density(data$heals))
+plot(density(data$killPlace))
+plot(density(data$killPoints))
+plot(density(data$kills))
+plot(density(data$killStreaks))
+plot(density(data$longestKill))
+plot(density(data$matchDuration))
+plot(density(data$matchType))
+plot(density(data$maxPlace))
+plot(density(data$numGroups))
+plot(density(data$rankPoints))
+plot(density(data$revives))
+plot(density(data$rideDistance))
+plot(density(data$roadKills))
+plot(density(data$swimDistance))
+plot(density(data$teamKills))
+plot(density(data$vehicleDestroys))
+plot(density(data$walkDistance))
+plot(density(data$weaponsAcquired))
+plot(density(data$winPoints))
+plot(density(data$winPlacePerc))
+```
+
+
+```{r normalization }
+
+data$assists<- scales::rescale(data$assists, to=c(0,1)) ## min-max
+data$boosts<- scales::rescale(data$boosts, to=c(0,1))
+data$damageDealt <-scales::rescale(data$damageDealt, to=c(0,1)) ## min-max
+
+data$DBNOs<-scales::rescale(data$DBNOs, to=c(0,1))## min-max
+
+data$headshotKills<-scales::rescale(data$headshotKills, to=c(0,1)) ## min-max
+
+data$heals<-scales::rescale(data$heals, to=c(0,1))## min-max
+
+data$killPlace <- scale(data$killPlace)##scale
+
+data$killPoints <-scales::rescale(data$killPoints, to=c(0,1))
+
+data$kills<-scales::rescale(data$kills, to=c(0,1))
+
+data$killStreaks<-scales::rescale(data$killStreaks, to=c(0,1))
+  
+data$longestKill<-scales::rescale(data$longestKill, to=c(0,1))
+
+data$matchDuration<-sqrt(data$matchDuration)
+data$matchDuration<-scale(data$matchDuration)##scale
+
+data$maxPlace<- log(data$maxPlace)
+data$maxPlace<-scale(data$maxPlace)##scale
+
+data$numGroups<- log(data$numGroups)
+data$numGroups<-scale(data$numGroups)##scale
+
+data$rankPoints<-scales::rescale(data$rankPoints, to=c(0,1))
+data$revives<-scales::rescale(data$revives, to=c(0,1))
+data$rideDistance<-scales::rescale(data$rideDistance, to=c(0,1))
+data$roadKills<-scales::rescale(data$roadKills, to=c(0,1))
+data$swimDistance<-scales::rescale(data$swimDistance, to=c(0,1))
+data$teamKills<-scales::rescale(data$teamKills, to=c(0,1))
+data$vehicleDestroys<-scales::rescale(data$vehicleDestroys, to=c(0,1))
+data$weaponsAcquired<-scales::rescale(data$weaponsAcquired, to=c(0,1))
+data$winPoints<-scales::rescale(data$winPoints, to=c(0,1))
+
+data$totalDistance<-scales::rescale(data$totalDistance, to=c(0,1))
+
+summary(data)
+df <- data[-c(1:3)]
+df_num <- df
+df_num$matchType <- as.numeric(df_num$matchType)
+
+
+```
+Pearson's Correlation
+```{r}
+# Pearson's Correlation 
+library(GGally)
+ggcorr(df_num, label = TRUE,label_alpha = TRUE)
+```
+
+
+
+PCA
+```{r lr}
+df.pca<-prcomp(df_num[,c(1:25)], center = TRUE, scale. = TRUE)
+summary(df.pca)
+
+#library(devtools)
+#install_github("vqv/ggbiplot")
+
+#library(ggbiplot)
+
+pc_var <- df.pca$sdev^2
+pc_var
+
+plot(pc_var , xlab = "Principal Component", ylab = "Proportion of Variance Explained", ylim=c(0,1) ,type = 'b')
+
+#biplot(df.pca, scale = 0)
+```
+
+
+use Random Forest feature selection
+The data is too large to process, we sampled 5 different sets (10w) each, and average out the returned results. 
+```{r}
+df_rf1 <- df[sample(nrow(df), size=100000, replace = FALSE),]
+df_rf2 <- df[sample(nrow(df), size=100000, replace = FALSE),]
+df_rf3 <- df[sample(nrow(df), size=100000, replace = FALSE),]
+
+# data_rf <- randomForest(formula = winPlacePerc ~ ., data = df, importance = TRUE, ntree = 10)
+data_rf1<- randomForest(formula = winPlacePerc ~ ., data = df_rf2, importance = TRUE, ntree = 50)
+data_rf2<- randomForest(formula = winPlacePerc ~ ., data = df_rf3, importance = TRUE, ntree = 50)
+data_rf3<- randomForest(formula = winPlacePerc ~ ., data = df, importance = TRUE, ntree = 50)
+
+data_var_importance1<- data.frame(importance(data_rf1))
+data_var_importance2 <- data.frame(importance(data_rf2))
+data_var_importance3 <- data.frame(importance(data_rf3))
+
+data_var_importance1
+data_var_importance2
+data_var_importance3
+
+varImpPlot(data_rf1)
+varImpPlot(data_rf2)
+varImpPlot(data_rf3)
+
+data_crossVal<- rfcv(df_rf1[,c(2:20)], data$winPlacePerc, cv.fold = 5, step = .8) 
+
+with(data_crossVal, plot(n.var, error.cv, log="x", type="o", lwd=2,
+                    xlab="Number of Variables", ylab="Error Rate"))
+data_crossVal$error.cv
+
+```
+
+
+use GBM for feature selection
+```{r GBM, include= TRUE, echo= TRUE}
+set.seed(123)
+library(gbm)
+# train GBM model
+gbm.fit <- gbm(
+  formula = winPlacePerc ~ .,
+  distribution = "gaussian",
+  data = df,
+  n.trees = 400,
+  interaction.depth = 1,
+  shrinkage = 0.001,
+  cv.folds = 5,
+  n.cores = NULL, # will use all cores by default
+  verbose = FALSE
+  )
+
+ 
+# print results
+print(gbm.fit)
+
+```
+
+
+Ridge + Elastic Net Regression
+```{r 1.1 feature_selection, include = TRUE, echo = TRUE}
+library(rsample)
+library(glmnet)
+set.seed(7)
+# save a new data and convert character data into numeric
+
+df_sample$matchType <- as.numeric(df_sample$matchType)
+
+# seperate train and test data
+data_train_test_split <- initial_split(df_sample, prop = 0.80)
+data_train_tbl <- training(data_train_test_split)
+data_test_tbl  <- testing(data_train_test_split)
+
+lambda <- 10^seq(-3, 3, length = 100)
+
+# Ridge
+# Build the model
+set.seed(123)
+ridge <- train(
+  winPlacePerc ~., data = data_train_tbl, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 0, lambda = lambda)
+  )
+# Model coefficients
+coef(ridge$finalModel, ridge$bestTune$lambda)
+# Make predictions
+predictions_ridge <- ridge %>% predict(data_test_tbl)
+predictions_train <- ridge %>% predict(data_train_tbl)
+# Model prediction performance
+data.frame(
+  ridge_RMSE = RMSE(predictions_ridge, data_test_tbl$winPlacePerc),
+  ridge_Rsquare = R2(predictions_ridge, data_test_tbl$winPlacePerc),
+  ridge_MSE = mean((predictions_ridge-data_test_tbl$winPlacePerc)^2)
+)
+
+data.frame(
+  ridge_RMSE_train = RMSE(predictions_train, data_train_tbl$winPlacePerc),
+  ridge_Rsquare_train = R2(predictions_train, data_train_tbl$winPlacePerc),
+  ridge_MSE_train = mean((predictions_train - data_train_tbl$winPlacePerc)^2)
+)
+plot(ridge)
+
+# Elastic Net Regression
+# Build the model
+set.seed(123)
+elastic <- train(
+  winPlacePerc ~., data = data_train_tbl, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+  )
+# Model coefficients
+coef(elastic$finalModel, elastic$bestTune$lambda)
+# Make predictions
+predictions <- elastic %>% predict(data_test_tbl)
+predictions2 <- elastic %>% predict(data_train_tbl)
+# Model prediction performance
+data.frame(
+  elastic_RMSE = RMSE(predictions, data_test_tbl$winPlacePerc),
+  elastic_Rsquare = R2(predictions, data_test_tbl$winPlacePerc),
+  elastic_MSE = mean((predictions-data_test_tbl$winPlacePerc)^2)
+)
+
+data.frame(
+  elastic_RMSE_train = RMSE(predictions2, data_train_tbl$winPlacePerc),
+  elastic_Rsquare_train = R2(predictions2, data_train_tbl$winPlacePerc),
+  elastic_MSE_train = mean((predictions2-data_train_tbl$winPlacePerc)^2)
+)
+
+
+plot(elastic)
+models <- list(ridge = ridge, elastic = elastic)
+resamples(models) %>% summary( metric = "RMSE")
+
+
+```
+
+

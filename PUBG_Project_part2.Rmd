@@ -1,0 +1,389 @@
+---
+title: "PUBG_Project"
+author: "Jing Pang"
+date: "3/25/2019"
+output: html_document
+---
+
+## Data Preparation
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(randomForest)
+library(RColorBrewer)
+library(xgboost)
+library(pROC)
+library(rsample)
+library(ModelMetrics)
+
+# load data into R
+data <- read.csv("~/R-workspace/dm_project/pubg-dataset/train_V2.csv")
+
+```
+
+## Data Analysis
+
+### Data Summary
+
+```{r}
+# remove empty
+data <- na.omit(data)
+head(data)
+
+data$matchType_num <- as.numeric(data$matchType)
+dim(data)
+
+# plot(density(data$assists)) 
+# plot(density(data$damageDealt))
+# plot(density(data$DBNOs))
+# plot(density(data$headshotKills))
+# plot(density(data$heals))
+# plot(density(data$killPlace))
+# plot(density(data$killPoints))
+# plot(density(data$kills))
+# plot(density(data$killStreaks))
+# plot(density(data$longestKill))
+# plot(density(data$matchDuration))
+# plot(density(data$matchType_num))
+# plot(density(data$maxPlace))
+# plot(density(data$numGroups))
+# plot(density(data$rankPoints))
+# plot(density(data$revives))
+# plot(density(data$rideDistance))
+# plot(density(data$roadKills))
+# plot(density(data$swimDistance))
+# plot(density(data$teamKills))
+# plot(density(data$vehicleDestroys))
+# plot(density(data$walkDistance))
+# plot(density(data$weaponsAcquired))
+# plot(density(data$winPoints))
+# plot(density(data$winPlacePerc))
+
+```
+
+### Outliers
+
+```{r}
+# Kills without movement
+data$totalDistance <- data$rideDistance + data$swimDistance + data$walkDistance
+hist(data$totalDistance)
+killWithoutMove <- data[which(data$totalDistance==0 & (data$kills | data$DBNOs)>0),c(1)]
+nrow(killWithoutMove)
+
+# Anomalies in roadKills
+hist(data$roadKills)
+roadKillOut10 <- data[which(data$roadKills>10),c(1)]
+nrow(roadKillOut10)
+
+# Anomalies in aim (100% headshot rate)
+data$headShotRate <- data$headshotKills / data$kills 
+hist(data$headShotRate)
+headShot100Perc <-  data[which(data$headShotRate==1 & (data$kills | data$DBNOs)>5),c(1)]
+nrow(headShot100Perc)
+
+# Anomalies in aim (Longest kill)
+boxplot(data$longestKill)
+longestKill <- data[which(data$longestKill>1000),c(1)]
+nrow(longestKill)
+
+# Anomalies in travelling (rideDistance, walkDistance and swimDistance)
+hist(data$rideDistance)
+hist(data$walkDistance)
+hist(data$swimDistance)
+
+# Anomalies in total kilss
+killOver25 <- data[which(data$kills>25),c(1)]
+
+# remove outliers
+df <- subset(data, !(data$Id %in% killWithoutMove))
+df <- subset(df, !(df$Id %in% roadKillOut10))
+df <- subset(df, !(df$Id %in% headShot100Perc))
+df <- subset(df, !(df$Id %in% longestKill))
+df <- subset(df, !(df$Id %in% killOver25))
+
+# summary(df)
+
+# remove none-relevant features
+df_xgb <- subset(df,select=-c(Id,groupId,matchId,matchType,totalDistance,headShotRate))
+
+```
+
+### Feature Selection 
+#### Principle Componenet Analysis
+
+```{r}
+
+d_pca <- prcomp(df_xgb, scale = TRUE)
+
+# The “center” and “scale” components correspond to the means and standard deviations of the variables that were used for scaling prior to implementing PCA
+summary(d_pca)
+
+# The rotation matrix provides the principle componenet loadings; each column of the matrix corresponds to principle component loading vector
+d_pca$rotation
+
+# Output "x" in pr_comp_usarr represents the actual principle component SCORE vectors that are calculated when you matrix multiple rotation by our original matrix
+dim(d_pca$x)
+
+# standard deviation
+d_pca$sdev
+
+# Variance explained by each principle component by squaring these sd's
+d_var <- d_pca$sdev^2
+d_var
+
+#We can plot PVE explained by each component:
+plot(d_var, xlab = "Principal Component", ylab = "Proportion of Variance Explained", ylim=c(0,1) ,type = 'b')
+
+
+```
+
+### Data Normalization
+
+```{r}
+# z-score normalization
+df$killPlace <- scale(df$killPlace)
+df$matchDuration <- scale(sqrt(df$matchDuration))
+df$maxPlace <- scale(log(df$maxPlace))
+df$numGroups <- scale(log(df$numGroups))
+
+# Min-max normalization
+df$assists<- scales::rescale(df$assists, to=c(0,1)) ## min-max
+df$boosts <- scales::rescale(df$boosts, to=c(0,1))
+df$damageDealt <-scales::rescale(df$damageDealt, to=c(0,1)) ## min-max
+df$DBNOs<-scales::rescale(df$DBNOs, to=c(0,1))## min-max
+df$headshotKills<-scales::rescale(df$headshotKills, to=c(0,1)) ## min-max
+df$heals<-scales::rescale(df$heals, to=c(0,1))## min-max
+df$killPoints <-scales::rescale(df$killPoints, to=c(0,1))
+df$kills<-scales::rescale(df$kills, to=c(0,1))
+df$killStreaks<-scales::rescale(df$killStreaks, to=c(0,1))
+df$longestKill<-scales::rescale(df$longestKill, to=c(0,1))
+df$rankPoints<-scales::rescale(df$rankPoints, to=c(0,1))
+df$revives<-scales::rescale(df$revives, to=c(0,1))
+df$rideDistance<-scales::rescale(df$rideDistance, to=c(0,1))
+df$roadKills<-scales::rescale(df$roadKills, to=c(0,1))
+df$swimDistance<-scales::rescale(df$swimDistance, to=c(0,1))
+df$teamKills<-scales::rescale(df$teamKills, to=c(0,1))
+df$vehicleDestroys<-scales::rescale(df$vehicleDestroys, to=c(0,1))
+df$weaponsAcquired<-scales::rescale(df$weaponsAcquired, to=c(0,1))
+df$winPoints<-scales::rescale(df$winPoints, to=c(0,1))
+df$totalDistance<-scales::rescale(df$totalDistance, to=c(0,1))
+
+# remove none-relevant features
+df_xgb <- subset(df,select=-c(Id,groupId,matchId,matchType,totalDistance,headShotRate))
+
+head(df_xgb)
+```
+
+
+### Preparation of Training and Testing Data
+
+```{r}
+# Set seed and create training + test data
+set.seed(1234)
+
+df_sample <- df_xgb[sample(nrow(df_xgb), size = 2000000, replace = FALSE),]
+
+train_test_split <- initial_split(df_sample, prop = 0.70)
+train_tbl <- training(train_test_split)
+test_tbl  <- testing(train_test_split)
+
+dtrain <- xgb.DMatrix(data = as.matrix(train_tbl[,-2]),label = train_tbl$winPlacePerc)
+dtest <- xgb.DMatrix(data = as.matrix(test_tbl[,-2]), label = test_tbl$winPlacePerc)
+
+
+```
+
+
+```{r}
+para <- list(objective = 'reg:linear',
+          booster = 'gbtree',
+          eta = 0.3,
+          max_depth = 6,
+          min_child_weight = 1,
+          gamma = 0,
+          subsample = .4,
+          colsample_bytree = .4)
+
+
+xgboost_cv <- xgb.cv(params = para, data = dtrain, nfold = 10, metrics = "rmse", print_every_n = 1, maximize = TRUE, nrounds = 1000, early_stopping_rounds = 20)
+
+
+xgboost_cv <- xgb.cv(params = para, data = dtrain, nfold = 4, metrics = "logloss", print_every_n = 1, maximize = TRUE, nrounds = 1000, early_stopping_rounds = 20)
+
+```
+
+
+```{r}
+
+# model hyperparameters
+para1 <- list(objective = 'reg:linear',
+          booster = 'gbtree',
+          eval_metric = 'rmse',
+          eta = .1,
+          max_depth = 6,
+          min_child_weight = 1,
+          gamma = 0,
+          subsample = .4,
+          colsample_bytree = .4)
+
+xgb_model_1 <- xgb.train(params = para1,
+                       data = dtrain,
+                       nrounds = 100,
+                       watchlist = list(train = dtrain),
+                       early_stopping_rounds = 20,
+                       verbose = T,
+                       print_every_n = 5,
+                       lambda = 2,
+                       maximize = F)
+
+# feature importance
+varimp <- xgb.importance(model = xgb_model_1)
+varimp
+
+# plot feature importance
+ggplot(data = varimp, aes(x = reorder(Feature, Gain), y = Gain)) +
+  geom_bar(stat = 'identity') +
+  guides(fill = F) +
+  labs(title = 'Feature Importance', x = 'Feature', y = 'Importance') +
+  coord_flip()
+
+train_pred <- train_tbl %>%
+  mutate(xgb_pred = predict(xgb_model_1, dtrain) )
+
+test_pred <- test_tbl %>%
+  mutate(xgb_pred = predict(xgb_model_1, dtest) )
+
+
+mse_train <- mse(train_pred$winPlacePerc, train_pred$xgb_pred)
+rmse_train <- rmse(train_pred$winPlacePerc, train_pred$xgb_pred)
+mae_train <- mae(train_pred$winPlacePerc, train_pred$xgb_pred)
+
+mse_test <- mse(test_pred$winPlacePerc, test_pred$xgb_pred)
+rmse_test <- rmse(test_pred$winPlacePerc, test_pred$xgb_pred)
+mae_test <- mae(test_pred$winPlacePerc, test_pred$xgb_pred)
+
+
+data1 <-data.frame(MSE=c(mse_train),RMSE=c(rmse_train),MAE=c(mae_train))
+data2 <-data.frame(MSE=c(mse_test),RMSE=c(rmse_test),MAE=c(mae_test))
+table_error_1 <- rbind(TRAIN = data1, TEST = data2)
+table_error_1
+
+```
+
+
+
+```{r}
+
+# model hyperparameters
+para2 <- list(objective = 'reg:logistic',
+          booster = 'gbtree',
+          eval_metric = 'map',
+          eta = 0.3,
+          max_depth = 6,
+          min_child_weight = 1,
+          gamma = 0,
+          subsample = .4,
+          lambda = 2,
+          colsample_bytree = .4)
+
+xgb_model_2 <- xgb.train(params = para1,
+                       data = dtrain,
+                       nrounds = 100,
+                       watchlist = list(train = dtrain),
+                       early_stopping_rounds = 20,
+                       verbose = T,
+                       print_every_n = 5,
+                       maximize = F)
+
+# feature importance
+varimp <- xgb.importance(model = xgb_model_2)
+varimp
+
+# plot feature importance
+ggplot(data = varimp, aes(x = reorder(Feature, Gain), y = Gain)) +
+  geom_bar(stat = 'identity') +
+  guides(fill = F) +
+  labs(title = 'Feature Importance', x = 'Feature', y = 'Importance') +
+  coord_flip()
+
+train_pred <- train_tbl %>%
+  mutate(xgb_pred = predict(xgb_model_2, dtrain) )
+
+test_pred <- test_tbl %>%
+  mutate(xgb_pred = predict(xgb_model_2, dtest) )
+
+
+mse_train <- mse(train_pred$winPlacePerc, train_pred$xgb_pred)
+rmse_train <- rmse(train_pred$winPlacePerc, train_pred$xgb_pred)
+mae_train <- mae(train_pred$winPlacePerc, train_pred$xgb_pred)
+
+mse_test <- mse(test_pred$winPlacePerc, test_pred$xgb_pred)
+rmse_test <- rmse(test_pred$winPlacePerc, test_pred$xgb_pred)
+mae_test <- mae(test_pred$winPlacePerc, test_pred$xgb_pred)
+
+data1 <-data.frame(MSE=c(mse_train),RMSE=c(rmse_train),MAE=c(mae_train))
+data2 <-data.frame(MSE=c(mse_test),RMSE=c(rmse_test),MAE=c(mae_test))
+table_error_2 <- rbind(TRAIN = data1, TEST = data2)
+
+table_error_2
+
+```
+
+
+
+
+
+```{r}
+require(lightgbm)
+# load in the agaricus dataset
+dtrain <- as.matrix(train_tbl[,-c(25)])
+dtest <- as.matrix(test_tbl)
+dtrain_lgb <- lgb.Dataset(data = dtrain, label = train_tbl$winPlacePerc)
+dtest_lgb <- lgb.Dataset.create.valid(dtrain_lgb, test_tbl[,-c(25)], label = test_tbl$winPlacePerc)
+
+nrounds <- 2
+param <- list(num_leaves = 4,
+              learning_rate = 1,
+              objective = "regression")
+
+print("Running cross validation")
+# Do cross validation, this will print result out as
+# [iteration]  metric_name:mean_value+std_value
+# std_value is standard deviation of the metric
+lgb.cv(param,
+       dtrain_lgb,
+       nrounds,
+       nfold = 5,
+       eval = "binary_error")
+
+lgb <- lgb.train(param, dtrain_lgb, nrounds, nfold=5, eval="binary_error")
+
+train_pred <- train_tbl %>%
+  mutate(pred = predict(lgb, dtrain) )
+
+test_pred <- test_tbl %>%
+  mutate(pred = predict(lgb, dtest) )
+
+
+mse_train <- mse(train_pred$winPlacePerc, train_pred$pred)
+rmse_train <- rmse(train_pred$winPlacePerc, train_pred$pred)
+mae_train <- mae(train_pred$winPlacePerc, train_pred$pred)
+
+mse_test <- mse(test_pred$winPlacePerc, test_pred$pred)
+rmse_test <- rmse(test_pred$winPlacePerc, test_pred$pred)
+mae_test <- mae(test_pred$winPlacePerc, test_pred$pred)
+
+
+data1 <-data.frame(MSE=c(mse_train),RMSE=c(rmse_train),MAE=c(mae_train))
+data2 <-data.frame(MSE=c(mse_test),RMSE=c(rmse_test),MAE=c(mae_test))
+table_error_3 <- rbind(TRAIN = data1, TEST = data2)
+
+table_error_3
+
+```
+
+
+
+

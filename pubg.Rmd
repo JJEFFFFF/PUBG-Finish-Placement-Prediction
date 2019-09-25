@@ -1,0 +1,280 @@
+---
+title: "Project"
+author: "Tian Xue"
+date: "3/25/2019"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(glmnet)
+library(pROC)
+library(rsample)
+library(MASS)
+library(class)
+library(rpart)
+library(ROCR)
+library(car)
+library(caret)
+library(lars)
+library(DMwR2)
+library(tree)
+library(randomForest)
+library(ISLR)
+library(e1071)
+library(mlbench)
+library(ModelMetrics)
+library(rattle)
+```
+
+```{r}
+data <- read.csv("train_V2.csv")
+summary(data)
+
+#Process the nulls 
+sum(is.na(data))
+data <- na.omit(data)
+sum(is.na(data))
+nrow(data)
+
+data$matchType <- as.factor(data$matchType)
+
+#Observe the variables in the dataset
+plot(density(data$assists))
+plot(density(data$boosts))
+plot(density(data$damageDealt))
+plot(density(data$DBNOs))
+plot(density(data$headshotKills))
+plot(density(data$heals))
+plot(density(data$killPlace))
+plot(density(data$killPoints))
+plot(density(data$kills))
+plot(density(data$killStreaks))
+plot(density(data$longestKill))
+plot(density(data$matchDuration))
+plot(density(data$maxPlace))
+plot(density(data$numGroups))
+plot(density(data$rankPoints))
+plot(density(data$revives))
+plot(density(data$rideDistance))
+plot(density(data$roadKills))
+plot(density(data$swimDistance))
+plot(density(data$teamKills))
+plot(density(data$vehicleDestroys))
+plot(density(data$walkDistance))
+plot(density(data$weaponsAcquired))
+plot(density(data$winPoints))
+plot(density(data$winPlacePerc))
+
+# Kills without movement
+data$totalDistance <- data$rideDistance + data$swimDistance + data$walkDistance
+hist(data$totalDistance)
+killWithoutMove <- data[which(data$totalDistance==0 & (data$DBNOs | data$kills>=1)), c(1)]
+nrow(killWithoutMove)
+
+# Anomalies in roadKills
+boxplot(data$roadKills)
+roadKillOut10 <- data[which(data$roadKills>10),c(1)]
+nrow(roadKillOut10)
+
+# Anomalies in aim (100% headshot rate)
+data$headShotRate <- data$headshotKills / data$kills 
+hist(data$headShotRate)
+headShot100Perc <- data[which(data$headShotRate==1 & (data$kills >= 5)),c(1)]
+nrow(headShot100Perc)
+
+# Anomalies in aim (Longest kill)
+boxplot(data$longestKill)
+longestKill <- data[which(data$longestKill>1000),c(1)]
+nrow(longestKill)
+
+# Anomalies in travelling (rideDistance, walkDistance and swimDistance)
+hist(data$rideDistance)
+hist(data$walkDistance)
+hist(data$swimDistance)
+
+# Kills Amount Anomalies
+totalKills<- data[which(data$kills>=25),c(1)]
+
+# remove outliers
+data <- subset(data, !(data$Id %in% killWithoutMove))
+data <- subset(data, !(data$Id %in% roadKillOut10))
+data <- subset(data, !(data$Id %in% headShot100Perc))
+data <- subset(data, !(data$Id %in% longestKill))
+data <- subset(data, !(data$Id %in% totalKills))
+
+nrow(data)
+
+min_assists <- min(data$assists)
+max_assists <- max(data$assists)
+data$assists_scaled <- (data$assists - min_assists)/(max_assists - min_assists)
+min_boosts <- min(data$boosts)
+max_boosts <- max(data$boosts)
+data$boosts_scaled <- (data$boosts - min_boosts)/(max_boosts - min_boosts)
+min_damageDealt <- min(data$damageDealt)
+max_damageDealt <- max(data$damageDealt)
+data$damageDealt_scaled <- (data$damageDealt - min_damageDealt)/(max_damageDealt - min_damageDealt)
+min_DBNOs <- min(data$DBNOs)
+max_DBNOs <- max(data$DBNOs)
+data$DBNOs_scaled <- (data$DBNOs - min_DBNOs)/(max_DBNOs - min_DBNOs)
+min_headshotKills <- min(data$headshotKills)
+max_headshotKills <- max(data$headshotKills)
+data$headshotKills_scaled <- (data$headshotKills - min_headshotKills)/(max_headshotKills - min_headshotKills)
+min_heals <- min(data$heals)
+max_heals <- max(data$heals)
+data$heals_scaled <- (data$heals - min_heals)/(max_heals - min_heals)
+min_killPlace <- min(data$killPlace)
+max_killPlace <- max(data$killPlace)
+data$killPlace_scaled <- (data$killPlace - min_killPlace)/(max_killPlace - min_killPlace)
+min_killPoints <- min(data$killPoints)
+max_killPoints <- max(data$killPoints)
+data$killPoints_scaled <- (data$killPoints - min_killPoints)/(max_killPoints - min_killPoints)
+min_kills <- min(data$kills)
+max_kills <- max(data$kills)
+data$kills_scaled <- (data$kills - min_kills)/(max_kills - min_kills)
+min_killStreaks <- min(data$killStreaks)
+max_killStreaks <- max(data$killStreaks)
+data$killStreaks_scaled <- (data$killStreaks - min_killStreaks)/(max_killStreaks - min_killStreaks)
+min_longestKill <- min(data$longestKill)
+max_longestKill <- max(data$longestKill)
+data$longestKill_scaled <- (data$longestKill - min_longestKill)/(max_longestKill - min_longestKill)
+min_rankPoints <- min(data$rankPoints)
+max_rankPoints <- max(data$rankPoints)
+data$rankPoints_scaled <- (data$rankPoints - min_rankPoints)/(max_rankPoints - min_rankPoints)
+min_revives <- min(data$revives)
+max_revives <- max(data$revives)
+data$revives_scaled <- (data$revives - min_revives)/(max_revives - min_revives)
+min_rideDistance <- min(data$rideDistance)
+max_rideDistance <- max(data$rideDistance)
+data$rideDistance_scaled <- (data$rideDistance - min_rideDistance)/(max_rideDistance - min_rideDistance)
+min_roadKills <- min(data$roadKills)
+max_roadKills <- max(data$roadKills)
+data$roadKills_scaled <- (data$roadKills - min_roadKills)/(max_roadKills - min_roadKills)
+min_swimDistance <- min(data$swimDistance)
+max_swimDistance <- max(data$swimDistance)
+data$swimDistance_scaled <- (data$swimDistance - min_swimDistance)/(max_swimDistance - min_swimDistance)
+min_teamKills <- min(data$teamKills)
+max_teamKills <- max(data$teamKills)
+data$teamKills_scaled <- (data$teamKills - min_teamKills)/(max_teamKills - min_teamKills)
+min_swimDistance <- min(data$swimDistance)
+max_swimDistance <- max(data$swimDistance)
+data$swimDistance_scaled <- (data$swimDistance - min_swimDistance)/(max_swimDistance - min_swimDistance)
+min_teamKills <- min(data$teamKills)
+max_teamKills <- max(data$teamKills)
+data$teamKills_scaled <- (data$teamKills - min_teamKills)/(max_teamKills - min_teamKills)
+min_vehicleDestroys <- min(data$vehicleDestroys)
+max_vehicleDestroys <- max(data$vehicleDestroys)
+data$vehicleDestroys_scaled <- (data$vehicleDestroys - min_vehicleDestroys)/(max_vehicleDestroys - min_vehicleDestroys)
+min_walkDistance <- min(data$walkDistance)
+max_walkDistance <- max(data$walkDistance)
+data$walkDistance_scaled <- (data$walkDistance - min_walkDistance)/(max_walkDistance - min_walkDistance)
+min_weaponsAcquired <- min(data$weaponsAcquired)
+max_weaponsAcquired <- max(data$weaponsAcquired)
+data$weaponsAcquired_scaled <- (data$weaponsAcquired - min_weaponsAcquired)/(max_weaponsAcquired - min_weaponsAcquired)
+min_winPoints <- min(data$winPoints)
+max_winPoints <- max(data$winPoints)
+data$winPoints_scaled <- (data$winPoints - min_winPoints)/(max_winPoints - min_winPoints)
+
+data$matchDuration_scaled <- sqrt(data$matchDuration)
+data$matchDuration_scaled <- scale(data$matchDuration_scaled, center = TRUE, scale = TRUE)
+data$maxPlace_scaled <- log(data$maxPlace)
+data$maxPlace_scaled <- scale(data$maxPlace_scaled, center = TRUE, scale = TRUE)
+data$numGroups_scaled <- sqrt(data$numGroups)
+data$numGroups_scaled <- scale(data$numGroups_scaled, center = TRUE, scale = TRUE)
+summary(data)
+```
+
+```{r}
+#Linear regression
+#Removed matchType, because it is factor.
+set.seed(100)
+pubg_train_test_split <- initial_split(data, prop = 0.80)
+pubg_train_tbl <- training(pubg_train_test_split)
+pubg_test_tbl <- testing(pubg_train_test_split)
+data_lm1 <- lm(formula = winPlacePerc ~ assists_scaled+boosts_scaled+damageDealt_scaled+DBNOs_scaled+headshotKills_scaled+heals_scaled+killPlace_scaled+killPoints_scaled+kills_scaled+killStreaks_scaled+longestKill_scaled+matchDuration_scaled+maxPlace_scaled+numGroups_scaled+rankPoints_scaled+revives_scaled+rideDistance_scaled+roadKills_scaled+swimDistance_scaled+teamKills_scaled+vehicleDestroys_scaled+walkDistance_scaled+weaponsAcquired_scaled+winPoints_scaled, data = pubg_train_tbl)
+summary(data_lm1)
+
+pubg_AIC_b <- stepAIC(data_lm1,direction = "backward")
+summary(pubg_AIC_b)
+
+pubg_AIC_f <- stepAIC(data_lm1,direction = "forward")
+summary(pubg_AIC_f)
+
+pubg_AIC_both <- stepAIC(data_lm1,direction = "both")
+summary(pubg_AIC_both)
+
+pubg_test_tbl <- pubg_test_tbl %>% mutate(P_TEST = predict(data_lm1, newdata = pubg_test_tbl, type = "response"))
+
+print("MSE for test data:")
+mse(pubg_test_tbl$winPlacePerc, pubg_test_tbl$P_TEST)
+print("RMSE for test data:")
+rmse(pubg_test_tbl$winPlacePerc, pubg_test_tbl$P_TEST)
+print("MAE for test data:")
+mae(pubg_test_tbl$winPlacePerc, pubg_test_tbl$P_TEST)
+
+pubg_train_tbl <- pubg_train_tbl %>% mutate(P_TEST = predict(data_lm1, newdata = pubg_train_tbl, type = "response"))
+
+print("MSE for training data:")
+mse(pubg_train_tbl$winPlacePerc, pubg_train_tbl$P_TEST)
+print("RMSE for training data:")
+rmse(pubg_train_tbl$winPlacePerc, pubg_train_tbl$P_TEST)
+print("MAE for training data:")
+mae(pubg_train_tbl$winPlacePerc, pubg_train_tbl$P_TEST)
+
+#24 variables
+```
+
+```{r}
+#sample the dataset
+data_sample <- data[sample(nrow(data), size = 10000, replace = FALSE),]
+data_sample <- data_sample[,-31]
+
+#random forest
+#split data
+set.seed(123)
+data_sample_train_test_split <- initial_split(data_sample, prop = 0.8)
+data_sample_train_tbl <- training(data_sample_train_test_split)
+data_sample_test_tbl <- testing(data_sample_train_test_split)
+
+#run rf
+data_train_rf <- randomForest(formula = winPlacePerc ~ assists_scaled+boosts_scaled+damageDealt_scaled+DBNOs_scaled+headshotKills_scaled+heals_scaled+killPlace_scaled+killPoints_scaled+kills_scaled+killStreaks_scaled+longestKill_scaled+matchDuration_scaled+maxPlace_scaled+numGroups_scaled+rankPoints_scaled+revives_scaled+rideDistance_scaled+roadKills_scaled+swimDistance_scaled+teamKills_scaled+vehicleDestroys_scaled+walkDistance_scaled+weaponsAcquired_scaled+winPoints_scaled+matchType, data = data_sample_train_tbl, importance = TRUE, ntree = 50)
+varImpPlot(data_train_rf)
+data_train_var_importance <- data.frame(randomForest::importance(data_train_rf))
+data_train_var_importance[order(data_train_var_importance[,1], decreasing = T),]
+
+
+#k-fold cross validation
+data_train_kfcv<- rfcv(data_sample_train_tbl[29:54], data_sample_train_tbl$winPlacePerc, cv.fold = 4, step = .8) 
+
+with(data_train_kfcv, plot(n.var, error.cv, log="x", type="o", lwd=2, xlab="Number of Variables", ylab="Error Rate"))
+data_train_kfcv$error.cv
+
+#Resample and run 5 sets, choose to use the top10 variables:walkDistance, killPlace, matchDuration, numGroups, matchType, maxPlace, damageDealt, longestKill, DBNOs, and Boosts.
+data_train_tf_opt <- randomForest(formula = winPlacePerc ~ walkDistance_scaled+killPlace_scaled+matchDuration_scaled+numGroups_scaled+matchType+maxPlace_scaled+damageDealt_scaled+longestKill_scaled+DBNOs_scaled+boosts_scaled, data = data_sample_train_tbl, importance = TRUE, ntree = 50)
+
+data_sample_test_tbl <- data_sample_test_tbl %>% mutate(P_TEST = predict(data_train_tf_opt, newdata = data_sample_test_tbl, type = "response"))
+
+print("RMSE for test data:")
+rmse(data_sample_test_tbl$winPlacePerc, data_sample_test_tbl$P_TEST)
+
+data_sample_train_tbl <- data_sample_train_tbl %>% mutate(P_TEST = predict(data_train_tf_opt, newdata = data_sample_train_tbl, type = "response"))
+
+print("RMSE for training data:")
+rmse(data_sample_train_tbl$winPlacePerc, data_sample_train_tbl$P_TEST)
+
+plot(data_train_tf_opt, log = "y")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
